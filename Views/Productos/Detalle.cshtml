@@ -1,0 +1,40 @@
+﻿@model TiendaUTEC.Models.Producto
+@{
+    ViewData["Title"] = "Detalle del producto";
+}
+<h1>Detalle del producto</h1>
+<div class="card">
+    <div class="card-body">
+        <h3 class="card-title">@Model.Nombre</h3>
+
+        <p>
+            <strong>Id:</strong>
+            @Model.Id
+        </p>
+
+        <p>
+            <strong>Precio:</strong>
+            $@Model.Precio.ToString("N2")
+        </p>
+
+        <p>
+            <strong>Stock:</strong>
+            @Model.Stock
+        </p>
+
+        <p>
+            <strong>Categoría:</strong>
+            @Model.NombreCategoria
+        </p>
+
+        <p>
+            <strong>Descripción:</strong>
+            @Model.Descripcion
+        </p>
+
+        <a asp-action="Index" class="btn btn-secondary">
+            Regresar
+        </a>
+
+    </div>
+</div>

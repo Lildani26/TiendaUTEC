@@ -1,0 +1,40 @@
+﻿@model TiendaUTEC.Models.Producto
+
+@{
+    ViewData["Title"] = "Eliminar producto";
+}
+
+<h1>Eliminar producto</h1>
+
+<div class="alert alert-danger">
+
+    <h4>¿Está seguro de eliminar este producto?</h4>
+
+    <hr />
+
+    <p>
+        <strong>Producto:</strong>
+        @Model.Nombre
+    </p>
+
+    <p>
+        <strong>Precio:</strong>
+        $@Model.Precio.ToString("N2")
+    </p>
+
+    <p>
+        <strong>Stock:</strong>
+        @Model.Stock
+    </p>
+
+</div>
+
+<form asp-action="EliminarConfirmado" method="post">
+    <input type="hidden" name="id" value="@Model.Id" />
+    <button type="submit" class="btn btn-danger">
+        Sí, eliminar
+    </button>
+    <a asp-action="Index" class="btn btn-secondary">
+        Cancelar
+    </a>
+</form> 
