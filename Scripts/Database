@@ -1,0 +1,529 @@
+/* Base de datos usada en el proyecto, contiene las tablas, datos de inicio, views, y los store procedure que se utilizaran
+*/
+USE master;
+GO
+IF DB_ID('TiendaUTEC') IS NULL
+    CREATE DATABASE TiendaUTEC;
+GO
+
+USE TiendaUTEC;
+GO
+
+USE master; 
+GO 
+BACKUP DATABASE TiendaUTEC 
+TO DISK = 'C:\backup\TiendaUTEC_antes_practica7.bak' 
+WITH INIT; 
+GO
+-- Vistas y procedimientos primero: quedan rotos si se borran
+-- las tablas que tienen debajo.
+DROP VIEW      IF EXISTS vw_Catalogo;
+DROP VIEW      IF EXISTS vw_ControlExistencias;
+DROP PROCEDURE IF EXISTS sp_IngresarLote;
+DROP PROCEDURE IF EXISTS sp_ConfirmarPedido;
+GO
+
+-- El orden importa: primero las tablas hijas, al final las
+-- tablas padre. Si lo invierte, las llaves foraneas impiden
+-- el borrado.
+DROP TABLE IF EXISTS PedidoDetalle;
+DROP TABLE IF EXISTS Pedidos;
+DROP TABLE IF EXISTS CarritoItems;
+DROP TABLE IF EXISTS Carritos;
+DROP TABLE IF EXISTS MovimientosInventario;
+DROP TABLE IF EXISTS Lotes;
+DROP TABLE IF EXISTS Proveedores;
+DROP TABLE IF EXISTS Clientes;
+DROP TABLE IF EXISTS Productos;
+DROP TABLE IF EXISTS Categorias;
+GO
+
+-- La tabla Productos tal como venia de las practicas
+-- anteriores: la categoria todavia es texto.
+CREATE TABLE Productos
+(
+    Id        INT IDENTITY(1,1) PRIMARY KEY,
+    Nombre    NVARCHAR(60)  NOT NULL,
+    Precio    DECIMAL(10,2) NOT NULL,
+    Stock     INT           NOT NULL DEFAULT 0,
+    Categoria NVARCHAR(50)  NOT NULL
+);
+GO
+
+INSERT INTO Productos (Nombre, Precio, Stock, Categoria) VALUES
+(N'Teclado mecánico',          25.00,  40, N'Periféricos'),
+(N'Mouse inalámbrico',         12.50,  60, N'Periféricos'),
+(N'Mouse gamer RGB',           22.00,  25, N'Periféricos'),
+(N'Webcam HD 1080p',           35.00,  18, N'Periféricos'),
+(N'Monitor 24 pulgadas',      180.00,  12, N'Monitores'),
+(N'Monitor 27 pulgadas 2K',   289.99,   8, N'Monitores'),
+(N'Monitor portátil 15.6',    149.00,   5, N'Monitores'),
+(N'Disco SSD 500 GB',          45.00,  30, N'Almacenamiento'),
+(N'Disco SSD 1 TB',            79.90,  22, N'Almacenamiento'),
+(N'Memoria USB 64 GB',          9.75, 100, N'Almacenamiento'),
+(N'Router WiFi 6',             69.00,  15, N'Redes'),
+(N'Cable de red Cat6 3 m',      4.50,  80, N'Redes'),
+(N'Switch 8 puertos',          28.00,  10, N'Redes'),
+(N'Audífonos con micrófono',   19.99,  35, N'Audio'),
+(N'Bocinas para escritorio',   24.50,  20, N'Audio');
+GO
+
+
+
+/* ===========================================================
+   SECCION 1 - CATEGORIAS Y MIGRACION DE LA COLUMNA DE TEXTO
+   =========================================================== */
+
+USE TiendaUTEC;
+GO
+
+CREATE TABLE Categorias
+(
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    Nombre      NVARCHAR(50)  NOT NULL,
+    Descripcion NVARCHAR(200) NULL,
+    Activa      BIT           NOT NULL DEFAULT 1,
+    CONSTRAINT UQ_Categorias_Nombre UNIQUE (Nombre)
+);
+GO
+
+-- Las categorias salen de los datos que ya existen
+INSERT INTO Categorias (Nombre)
+SELECT DISTINCT Categoria
+FROM   Productos
+WHERE  Categoria IS NOT NULL;
+GO
+
+-- Columna nueva, primero admitiendo nulos
+ALTER TABLE Productos ADD CategoriaId INT NULL;
+GO
+
+-- Se llena cruzando por el nombre
+UPDATE p
+SET    p.CategoriaId = c.Id
+FROM   Productos  p
+JOIN   Categorias c ON c.Nombre = p.Categoria;
+GO
+
+-- VERIFIQUE antes de seguir: no debe devolver filas
+SELECT * FROM Productos WHERE CategoriaId IS NULL;
+GO
+
+-- Ahora si, obligatoria
+ALTER TABLE Productos ALTER COLUMN CategoriaId INT NOT NULL;
+GO
+
+ALTER TABLE Productos
+ADD CONSTRAINT FK_Productos_Categorias
+    FOREIGN KEY (CategoriaId) REFERENCES Categorias(Id);
+GO
+
+-- Se elimina el texto repetido
+ALTER TABLE Productos DROP COLUMN Categoria;
+GO
+
+
+/* ===========================================================
+   SECCION 2 - PRODUCTOS: COLUMNAS NUEVAS Y RESTRICCIONES
+   =========================================================== */
+
+ALTER TABLE Productos ADD
+    Descripcion   NVARCHAR(400) NULL,
+    Sku           NVARCHAR(20)  NULL,
+    Activo        BIT           NOT NULL DEFAULT 1,
+    FechaCreacion DATETIME2     NOT NULL DEFAULT GETDATE();
+GO
+
+UPDATE Productos
+SET    Sku = 'SKU-' + RIGHT('00000' + CAST(Id AS VARCHAR(5)), 5);
+GO
+
+ALTER TABLE Productos ALTER COLUMN Sku NVARCHAR(20) NOT NULL;
+GO
+
+ALTER TABLE Productos
+ADD CONSTRAINT UQ_Productos_Sku UNIQUE (Sku);
+GO
+
+ALTER TABLE Productos
+ADD CONSTRAINT CK_Productos_Precio CHECK (Precio >= 0),
+    CONSTRAINT CK_Productos_Stock  CHECK (Stock  >= 0);
+GO
+
+
+/* ===========================================================
+   SECCION 3 - PROVEEDORES
+   =========================================================== */
+
+CREATE TABLE Proveedores
+(
+    Id        INT IDENTITY(1,1) PRIMARY KEY,
+    Nombre    NVARCHAR(80)  NOT NULL,
+    Contacto  NVARCHAR(80)  NULL,
+    Telefono  NVARCHAR(20)  NULL,
+    Correo    NVARCHAR(120) NULL,
+    Activo    BIT           NOT NULL DEFAULT 1,
+    CONSTRAINT UQ_Proveedores_Nombre UNIQUE (Nombre)
+);
+GO
+
+
+/* ===========================================================
+   SECCION 4 - LOTES
+   =========================================================== */
+
+CREATE TABLE Lotes
+(
+    Id               INT IDENTITY(1,1) PRIMARY KEY,
+    Codigo           NVARCHAR(40)  NOT NULL,
+    ProductoId       INT           NOT NULL,
+    ProveedorId      INT           NOT NULL,
+    Cantidad         INT           NOT NULL,
+    CostoUnitario    DECIMAL(10,2) NOT NULL,
+    FechaIngreso     DATETIME2     NOT NULL DEFAULT GETDATE(),
+    FechaVencimiento DATE          NULL,
+    CONSTRAINT UQ_Lotes_Codigo   UNIQUE (Codigo),
+    CONSTRAINT CK_Lotes_Cantidad CHECK (Cantidad > 0),
+    CONSTRAINT CK_Lotes_Costo    CHECK (CostoUnitario >= 0),
+    CONSTRAINT FK_Lotes_Productos
+        FOREIGN KEY (ProductoId)  REFERENCES Productos(Id),
+    CONSTRAINT FK_Lotes_Proveedores
+        FOREIGN KEY (ProveedorId) REFERENCES Proveedores(Id)
+);
+GO
+
+
+/* ===========================================================
+   SECCION 5 - MOVIMIENTOS DE INVENTARIO (BITACORA)
+   =========================================================== */
+
+CREATE TABLE MovimientosInventario
+(
+    Id          INT IDENTITY(1,1) PRIMARY KEY,
+    ProductoId  INT          NOT NULL,
+    LoteId      INT          NULL,
+    Tipo        NVARCHAR(10) NOT NULL,
+    Cantidad    INT          NOT NULL,
+    Fecha       DATETIME2    NOT NULL DEFAULT GETDATE(),
+    Referencia  NVARCHAR(60) NULL,
+    CONSTRAINT CK_Mov_Tipo
+        CHECK (Tipo IN ('ENTRADA', 'SALIDA', 'AJUSTE')),
+    CONSTRAINT CK_Mov_Cantidad CHECK (Cantidad <> 0),
+    CONSTRAINT FK_Mov_Productos
+        FOREIGN KEY (ProductoId) REFERENCES Productos(Id),
+    CONSTRAINT FK_Mov_Lotes
+        FOREIGN KEY (LoteId) REFERENCES Lotes(Id)
+);
+GO
+
+
+/* ===========================================================
+   SECCION 6 - CLIENTES
+   =========================================================== */
+
+CREATE TABLE Clientes
+(
+    Id            INT IDENTITY(1,1) PRIMARY KEY,
+    Nombre        NVARCHAR(80)  NOT NULL,
+    Apellido      NVARCHAR(80)  NOT NULL,
+    Correo        NVARCHAR(120) NOT NULL,
+    Telefono      NVARCHAR(20)  NULL,
+    Direccion     NVARCHAR(200) NULL,
+    FechaRegistro DATETIME2     NOT NULL DEFAULT GETDATE(),
+    Activo        BIT           NOT NULL DEFAULT 1,
+    CONSTRAINT UQ_Clientes_Correo UNIQUE (Correo),
+    CONSTRAINT CK_Clientes_Correo CHECK (Correo LIKE '%_@_%._%')
+);
+GO
+
+
+/* ===========================================================
+   SECCION 7 - CARRITO
+   =========================================================== */
+
+CREATE TABLE Carritos
+(
+    Id            INT IDENTITY(1,1) PRIMARY KEY,
+    ClienteId     INT          NOT NULL,
+    FechaCreacion DATETIME2    NOT NULL DEFAULT GETDATE(),
+    Estado        NVARCHAR(12) NOT NULL DEFAULT 'ABIERTO',
+    CONSTRAINT CK_Carritos_Estado
+        CHECK (Estado IN ('ABIERTO', 'CONVERTIDO', 'ABANDONADO')),
+    CONSTRAINT FK_Carritos_Clientes
+        FOREIGN KEY (ClienteId) REFERENCES Clientes(Id)
+);
+GO
+
+CREATE TABLE CarritoItems
+(
+    CarritoId  INT NOT NULL,
+    ProductoId INT NOT NULL,
+    Cantidad   INT NOT NULL,
+    CONSTRAINT PK_CarritoItems PRIMARY KEY (CarritoId, ProductoId),
+    CONSTRAINT CK_CarritoItems_Cantidad CHECK (Cantidad > 0),
+    CONSTRAINT FK_CarritoItems_Carritos
+        FOREIGN KEY (CarritoId) REFERENCES Carritos(Id)
+        ON DELETE CASCADE,
+    CONSTRAINT FK_CarritoItems_Productos
+        FOREIGN KEY (ProductoId) REFERENCES Productos(Id)
+);
+GO
+
+
+/* ===========================================================
+   SECCION 8 - PEDIDOS Y DETALLE
+   =========================================================== */
+
+CREATE TABLE Pedidos
+(
+    Id             INT IDENTITY(1,1) PRIMARY KEY,
+    ClienteId      INT           NOT NULL,
+    Fecha          DATETIME2     NOT NULL DEFAULT GETDATE(),
+    Estado         NVARCHAR(12)  NOT NULL DEFAULT 'PENDIENTE',
+    Total          DECIMAL(12,2) NOT NULL DEFAULT 0,
+    DireccionEnvio NVARCHAR(200) NULL,
+    CONSTRAINT CK_Pedidos_Estado
+        CHECK (Estado IN ('PENDIENTE', 'PAGADO', 'ENVIADO',
+                          'ENTREGADO', 'CANCELADO')),
+    CONSTRAINT CK_Pedidos_Total CHECK (Total >= 0),
+    CONSTRAINT FK_Pedidos_Clientes
+        FOREIGN KEY (ClienteId) REFERENCES Clientes(Id)
+);
+GO
+
+CREATE TABLE PedidoDetalle
+(
+    PedidoId       INT           NOT NULL,
+    ProductoId     INT           NOT NULL,
+    Cantidad       INT           NOT NULL,
+    PrecioUnitario DECIMAL(10,2) NOT NULL,
+    CONSTRAINT PK_PedidoDetalle PRIMARY KEY (PedidoId, ProductoId),
+    CONSTRAINT CK_Detalle_Cantidad CHECK (Cantidad > 0),
+    CONSTRAINT FK_Detalle_Pedidos
+        FOREIGN KEY (PedidoId)   REFERENCES Pedidos(Id),
+    CONSTRAINT FK_Detalle_Productos
+        FOREIGN KEY (ProductoId) REFERENCES Productos(Id)
+);
+GO
+
+
+/* ===========================================================
+   SECCION 9 - DATOS DE PRUEBA
+   =========================================================== */
+
+/* -----------------------------------------------------------
+   9.0 INVENTARIO INICIAL
+   ----------------------------------------------------------- */
+INSERT INTO MovimientosInventario
+       (ProductoId, Tipo, Cantidad, Referencia)
+SELECT  Id, 'AJUSTE', Stock, 'INVENTARIO INICIAL'
+FROM    Productos
+WHERE   Stock <> 0;
+GO
+
+INSERT INTO Proveedores (Nombre, Contacto, Telefono, Correo) VALUES
+ ('TecnoMayoreo S.A.', 'Luis Portillo', '2250-1100',
+  'ventas@tecnomayoreo.com'),
+ ('Importadora del Pacifico', 'Rosa Campos', '2250-2200',
+  'rosa@impacifico.com');
+GO
+
+INSERT INTO Clientes (Nombre, Apellido, Correo, Telefono, Direccion)
+VALUES
+ ('Ana',    'Martinez', 'ana.martinez@correo.com', '7700-1234',
+  'Col. Escalon, San Salvador'),
+ ('Carlos', 'Reyes',    'carlos.reyes@correo.com', '7700-5678',
+  'Santa Tecla, La Libertad'),
+ ('Sofia',  'Mejia',    'sofia.mejia@correo.com',  '7700-9012',
+  'San Miguel');
+GO
+
+INSERT INTO Categorias (Nombre, Descripcion)
+SELECT 'Audio', 'Audifonos, parlantes y microfonos'
+WHERE NOT EXISTS
+      (SELECT 1 FROM Categorias WHERE Nombre = 'Audio');
+GO
+
+INSERT INTO Productos
+       (Nombre, Precio, Stock, CategoriaId, Descripcion, Sku)
+VALUES
+ ('Audifonos diadema', 32.50, 0,
+  (SELECT Id FROM Categorias WHERE Nombre = 'Audio'),
+  'Audifonos cerrados con microfono', 'SKU-00101'),
+ ('Parlante bluetooth', 45.00, 0,
+  (SELECT Id FROM Categorias WHERE Nombre = 'Audio'),
+  'Parlante portatil con bateria de 8 horas', 'SKU-00102');
+GO
+
+
+/* ===========================================================
+   SECCION 10 - PROCEDIMIENTO: INGRESAR UN LOTE
+   =========================================================== */
+
+CREATE OR ALTER PROCEDURE sp_IngresarLote
+    @Codigo           NVARCHAR(40),
+    @ProductoId       INT,
+    @ProveedorId      INT,
+    @Cantidad         INT,
+    @CostoUnitario    DECIMAL(10,2),
+    @FechaVencimiento DATE = NULL
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF EXISTS (SELECT 1 FROM Lotes WHERE Codigo = @Codigo)
+    BEGIN
+        RAISERROR('El lote %s ya fue ingresado.', 16, 1, @Codigo);
+        RETURN;
+    END
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        INSERT INTO Lotes (Codigo, ProductoId, ProveedorId,
+                           Cantidad, CostoUnitario, FechaVencimiento)
+        VALUES (@Codigo, @ProductoId, @ProveedorId,
+                @Cantidad, @CostoUnitario, @FechaVencimiento);
+
+        DECLARE @LoteId INT = SCOPE_IDENTITY();
+
+        INSERT INTO MovimientosInventario
+               (ProductoId, LoteId, Tipo, Cantidad, Referencia)
+        VALUES (@ProductoId, @LoteId, 'ENTRADA', @Cantidad, @Codigo);
+
+        UPDATE Productos
+        SET    Stock = Stock + @Cantidad
+        WHERE  Id = @ProductoId;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+END
+GO
+
+
+/* ===========================================================
+   SECCION 11 - PROCEDIMIENTO: CONFIRMAR UN PEDIDO
+   =========================================================== */
+
+CREATE OR ALTER PROCEDURE sp_ConfirmarPedido
+    @CarritoId      INT,
+    @DireccionEnvio NVARCHAR(200) = NULL,
+    @PedidoId       INT OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON;
+    DECLARE @ClienteId INT;
+
+    SELECT @ClienteId = ClienteId
+    FROM   Carritos
+    WHERE  Id = @CarritoId AND Estado = 'ABIERTO';
+
+    IF @ClienteId IS NULL
+    BEGIN
+        RAISERROR('Carrito inexistente o ya procesado.', 16, 1);
+        RETURN;
+    END
+
+    IF NOT EXISTS (SELECT 1 FROM CarritoItems
+                   WHERE CarritoId = @CarritoId)
+    BEGIN
+        RAISERROR('El carrito esta vacio.', 16, 1);
+        RETURN;
+    END
+
+    IF EXISTS (SELECT 1
+               FROM   CarritoItems ci
+               JOIN   Productos p ON p.Id = ci.ProductoId
+               WHERE  ci.CarritoId = @CarritoId
+                 AND  p.Stock < ci.Cantidad)
+    BEGIN
+        RAISERROR('Existencia insuficiente en el carrito.', 16, 1);
+        RETURN;
+    END
+
+    BEGIN TRY
+        BEGIN TRANSACTION;
+
+        INSERT INTO Pedidos (ClienteId, DireccionEnvio)
+        VALUES (@ClienteId, @DireccionEnvio);
+
+        SET @PedidoId = SCOPE_IDENTITY();
+
+        INSERT INTO PedidoDetalle
+               (PedidoId, ProductoId, Cantidad, PrecioUnitario)
+        SELECT @PedidoId, ci.ProductoId, ci.Cantidad, p.Precio
+        FROM   CarritoItems ci
+        JOIN   Productos p ON p.Id = ci.ProductoId
+        WHERE  ci.CarritoId = @CarritoId;
+
+        UPDATE p
+        SET    p.Stock = p.Stock - ci.Cantidad
+        FROM   Productos p
+        JOIN   CarritoItems ci ON ci.ProductoId = p.Id
+        WHERE  ci.CarritoId = @CarritoId;
+
+        INSERT INTO MovimientosInventario
+               (ProductoId, Tipo, Cantidad, Referencia)
+        SELECT ci.ProductoId, 'SALIDA', ci.Cantidad,
+               'PEDIDO-' + CAST(@PedidoId AS VARCHAR(10))
+        FROM   CarritoItems ci
+        WHERE  ci.CarritoId = @CarritoId;
+
+        UPDATE Pedidos
+        SET    Total = (SELECT SUM(Cantidad * PrecioUnitario)
+                        FROM   PedidoDetalle
+                        WHERE  PedidoId = @PedidoId)
+        WHERE  Id = @PedidoId;
+
+        UPDATE Carritos
+        SET    Estado = 'CONVERTIDO'
+        WHERE  Id = @CarritoId;
+
+        COMMIT TRANSACTION;
+    END TRY
+    BEGIN CATCH
+        IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+        THROW;
+    END CATCH
+END
+GO
+
+
+/* ===========================================================
+   SECCION 12 - VISTAS
+   =========================================================== */
+
+CREATE OR ALTER VIEW vw_Catalogo
+AS
+SELECT  p.Id,
+        p.Sku,
+        p.Nombre,
+        p.Descripcion,
+        p.Precio,
+        p.Stock,
+        c.Nombre AS Categoria,
+        CASE WHEN p.Stock = 0 THEN 'AGOTADO'
+             WHEN p.Stock < 5 THEN 'POCAS UNIDADES'
+             ELSE 'DISPONIBLE' END AS Disponibilidad
+FROM    Productos  p
+JOIN    Categorias c ON c.Id = p.CategoriaId
+WHERE   p.Activo = 1;
+GO
+
+CREATE OR ALTER VIEW vw_ControlExistencias
+AS
+SELECT  p.Id,
+        p.Nombre,
+        p.Stock AS StockGuardado,
+        ISNULL(SUM(CASE WHEN m.Tipo = 'ENTRADA' THEN  m.Cantidad
+                        WHEN m.Tipo = 'SALIDA'  THEN -m.Cantidad
+                        ELSE m.Cantidad END), 0) AS StockCalculado
+FROM    Productos p
+LEFT JOIN MovimientosInventario m ON m.ProductoId = p.Id
+GROUP BY p.Id, p.Nombre, p.Stock;
+GO
+
